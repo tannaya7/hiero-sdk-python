@@ -7,7 +7,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from hiero_sdk_python.exceptions import PrecheckError, ReceiptStatusError
+from hiero_sdk_python.file.file_id import FileId
 from hiero_sdk_python.response_code import ResponseCode
+from hiero_sdk_python.transaction.transaction import Transaction
 from tck.handlers import registry
 from tck.handlers.file import append_file
 from tck.param.file import AppendFileParams
@@ -84,7 +86,7 @@ def test_append_file_wires_setters_and_returns_status():
     assert isinstance(result, StatusOnlyResponse)
     assert result.status == "SUCCESS"
 
-    tx.set_file_id.assert_called_once()
+    tx.set_file_id.assert_called_once_with(FileId.from_string("0.0.100"))
     tx.set_contents.assert_called_once_with("hello world")
     tx.set_chunk_size.assert_called_once_with(1024)
     tx.set_max_chunks.assert_called_once_with(5)
@@ -92,6 +94,20 @@ def test_append_file_wires_setters_and_returns_status():
     setter_order = [call[0] for call in tx.method_calls if call[0].startswith("set_")]
     assert setter_order.index("set_contents") < setter_order.index("set_max_chunks")
     assert setter_order.index("set_chunk_size") < setter_order.index("set_max_chunks")
+
+
+def test_append_file_defaults_file_id_when_omitted():
+    """An omitted fileId must default to FileId() so the network rejects it with INVALID_FILE_ID."""
+    params = AppendFileParams(sessionId="session-1", contents="hello")
+    tx = _mock_transaction()
+
+    with (
+        patch("tck.handlers.file.get_client", return_value=MagicMock()),
+        patch("tck.handlers.file.FileAppendTransaction", return_value=tx),
+    ):
+        append_file(params)
+
+    tx.set_file_id.assert_called_once_with(FileId())
 
 
 def test_append_file_applies_common_transaction_params():
@@ -130,14 +146,27 @@ def test_append_file_propagates_receipt_failure():
 
 
 def test_append_file_propagates_later_chunk_failure():
-    """A later chunk failing at submission must surface, not get masked by the first chunk's SUCCESS."""
-    params = AppendFileParams(sessionId="session-1", fileId="0.0.100", contents="x" * 10_000)
-    tx = _mock_transaction()
-    tx.execute.side_effect = PrecheckError(status=1, transaction_id="0.0.1@1.1", message="later chunk failed")
+    """A later chunk failing at submission must surface, not get masked by an earlier chunk's SUCCESS.
+
+    Uses a real FileAppendTransaction split into two 5-byte chunks so execute_all()
+    actually submits twice; only Transaction.execute (the lower-level submission call)
+    is mocked, first returning a successful chunk then raising on the second.
+    """
+    params = AppendFileParams(sessionId="session-1", fileId="0.0.100", contents="abcde12345", chunkSize=5)
+
+    first_chunk_response = MagicMock()
+    first_chunk_response.get_receipt.return_value = MagicMock(status=ResponseCode.SUCCESS)
 
     with (
         patch("tck.handlers.file.get_client", return_value=MagicMock()),
-        patch("tck.handlers.file.FileAppendTransaction", return_value=tx),
+        patch.object(
+            Transaction,
+            "execute",
+            side_effect=[
+                first_chunk_response,
+                PrecheckError(status=1, transaction_id="0.0.1@1.1", message="later chunk failed"),
+            ],
+        ),
         pytest.raises(PrecheckError),
     ):
         append_file(params)
