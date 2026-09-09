@@ -13,7 +13,13 @@ from hiero_sdk_python.timestamp import Timestamp
 from hiero_sdk_python.transaction.transaction_receipt import TransactionReceipt
 from tck.errors import JsonRpcError
 from tck.handlers.registry import rpc_method
-from tck.param.file import AppendFileParams, CreateFileParams, DeleteFileParams, GetFileContentsParams, GetFileInfoParams
+from tck.param.file import (
+    AppendFileParams,
+    CreateFileParams,
+    DeleteFileParams,
+    GetFileContentsParams,
+    GetFileInfoParams,
+)
 from tck.response.base import StatusOnlyResponse
 from tck.response.file import CreateFileResponse, DeleteFileResponse, GetFileContentsResponse, GetFileInfoResponse
 from tck.util.client_utils import get_client
@@ -92,10 +98,9 @@ def append_file(params: AppendFileParams) -> StatusOnlyResponse:
     if params.commonTransactionParams is not None:
         params.commonTransactionParams.apply_common_params(transaction, client)
 
-    response = transaction.execute(client, wait_for_receipt=False)
-    receipt: TransactionReceipt = response.get_receipt(client, validate_status=True)
+    receipts: list[TransactionReceipt] = transaction.execute_all(client, wait_for_receipt=True, validate_status=True)
 
-    return StatusOnlyResponse(ResponseCode(receipt.status).name)
+    return StatusOnlyResponse(ResponseCode(receipts[-1].status).name)
 
 
 @rpc_method("getFileContents")

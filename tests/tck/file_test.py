@@ -29,7 +29,7 @@ def _mock_transaction():
     tx.set_max_chunks.return_value = tx
 
     receipt = MagicMock(status=ResponseCode.SUCCESS)
-    tx.execute.return_value.get_receipt.return_value = receipt
+    tx.execute_all.return_value = [receipt]
     return tx
 
 
@@ -130,7 +130,7 @@ def test_append_file_propagates_receipt_failure():
     """A bad receipt status (e.g. non-existent file -> INVALID_FILE_ID) should raise, not be swallowed."""
     params = AppendFileParams(sessionId="session-1", fileId="0.0.999999", contents="hello")
     tx = _mock_transaction()
-    tx.execute.return_value.get_receipt.side_effect = ReceiptStatusError(
+    tx.execute_all.side_effect = ReceiptStatusError(
         status=ResponseCode.INVALID_FILE_ID,
         transaction_id=None,
         transaction_receipt=MagicMock(),
@@ -175,6 +175,24 @@ def test_append_file_propagates_later_chunk_failure():
 def test_append_file_invalid_file_id_raises():
     """A malformed fileId should fail via FileId.from_string before hitting the network."""
     params = AppendFileParams(sessionId="session-1", fileId="not-a-file-id", contents="hello")
+
+    with patch("tck.handlers.file.get_client", return_value=MagicMock()), pytest.raises(ValueError):
+        append_file(params)
+
+
+@pytest.mark.parametrize("chunk_size", [0, -1])
+def test_append_file_rejects_non_positive_chunk_size(chunk_size):
+    """set_chunk_size rejects non-positive values before any network call (TCK relies on this SDK guard)."""
+    params = AppendFileParams(sessionId="session-1", fileId="0.0.100", contents="hello", chunkSize=chunk_size)
+
+    with patch("tck.handlers.file.get_client", return_value=MagicMock()), pytest.raises(ValueError):
+        append_file(params)
+
+
+@pytest.mark.parametrize("max_chunks", [0, -1])
+def test_append_file_rejects_non_positive_max_chunks(max_chunks):
+    """set_max_chunks rejects non-positive values before any network call (TCK relies on this SDK guard)."""
+    params = AppendFileParams(sessionId="session-1", fileId="0.0.100", contents="hello", maxChunks=max_chunks)
 
     with patch("tck.handlers.file.get_client", return_value=MagicMock()), pytest.raises(ValueError):
         append_file(params)
